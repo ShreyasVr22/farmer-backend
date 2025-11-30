@@ -1,0 +1,148 @@
+═══════════════════════════════════════════════════════════════════════════════
+              RENDER ENVIRONMENT VARIABLES - QUICK REFERENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+Add these to Render dashboard when deploying:
+
+
+1️⃣ DATABASE_URL (Required)
+──────────────────────────────────────────────────────────────────────────────
+
+For MVP/Testing:
+  sqlite:///./farmers.db
+
+For Production (PostgreSQL):
+  postgresql://username:password@host:5432/database_name
+
+Where to add: Render Dashboard → Environment Variables
+
+
+2️⃣ SECRET_KEY (Required)
+──────────────────────────────────────────────────────────────────────────────
+
+For MVP:
+  farmer-assistant-secret-key-change-in-production
+
+For Production (generate random):
+  xK7pQmN9_dF2jH4vB8zR3wT5yL1sC6oP0
+
+Where to add: Render Dashboard → Environment Variables (Mark as Secret ✓)
+
+
+3️⃣ NO API KEY NEEDED FOR REAL-TIME WEATHER
+──────────────────────────────────────────────────────────────────────────────
+
+✅ /weather/realtime uses Open-Meteo API (FREE, NO KEY REQUIRED)
+✅ Already implemented in your code
+✅ No additional setup needed
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        FULL ENVIRONMENT VARIABLE LIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Environment Variables Used in Your Code:
+
+┌──────────────────┬─────────────┬──────────────────────────────────────────┐
+│ Variable         │ Required    │ Purpose                                  │
+├──────────────────┼─────────────┼──────────────────────────────────────────┤
+│ DATABASE_URL     │ YES         │ SQLite/PostgreSQL connection             │
+│ SECRET_KEY       │ YES         │ JWT token signing (keep secret!)         │
+└──────────────────┴─────────────┴──────────────────────────────────────────┘
+
+Where they're used:
+  • farmer_auth_backend.py (lines 17-23)
+  • Read via: os.getenv("VARIABLE_NAME", "default_value")
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        SETUP IN RENDER (3 STEPS)
+═══════════════════════════════════════════════════════════════════════════════
+
+Step 1: Go to your Render service dashboard
+
+Step 2: Click "Environment" tab
+
+Step 3: Add these variables:
+
+  Variable 1:
+  ┌─────────────────────────────────────────┐
+  │ Key: DATABASE_URL                       │
+  │ Value: sqlite:///./farmers.db           │
+  │ Type: String                            │
+  └─────────────────────────────────────────┘
+
+  Variable 2:
+  ┌─────────────────────────────────────────┐
+  │ Key: SECRET_KEY                         │
+  │ Value: [your-secret-key]                │
+  │ Type: String (Mark as Secret ✓)         │
+  └─────────────────────────────────────────┘
+
+Step 4: Click "Save changes" → Auto-deploys!
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        IMPORTANT NOTES
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ OPEN-METEO API (Real-time weather):
+   • No API key required
+   • Free tier available
+   • Already integrated in /weather/realtime endpoint
+   • NO environment variable needed
+
+✅ POSTGRES (Production):
+   • Create PostgreSQL instance on Render
+   • Copy connection string to DATABASE_URL
+   • Test locally first
+
+✅ SECRET_KEY:
+   • Keep it SECRET (don't commit to Git)
+   • Use strong random string (32+ chars)
+   • Change in production (don't use default)
+   • Lost keys = users logged out
+
+⚠️ SQLITE:
+   • Works for MVP
+   • Data persists between deploys
+   • Risk: Render free tier restarts = data loss
+   • Use PostgreSQL for production
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        GENERATE STRONG SECRET_KEY
+═══════════════════════════════════════════════════════════════════════════════
+
+Python (Recommended):
+  python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+Output example:
+  xK7pQmN9_dF2jH4vB8zR3wT5yL1sC6oP0
+
+Use this in SECRET_KEY environment variable.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                        CHECKLIST BEFORE DEPLOYING
+═══════════════════════════════════════════════════════════════════════════════
+
+□ DATABASE_URL set in Render
+□ SECRET_KEY set in Render (marked as Secret)
+□ render.yaml in your repository
+□ requirements.txt up to date
+□ Local tests pass (python test_integration.py)
+□ Pushed code to GitHub
+□ Render service connected to GitHub repo
+
+Once all checked:
+  → Render auto-deploys on git push
+  → Check logs for errors
+  → Test /health endpoint
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Your backend is ready to deploy! Add the 2 environment variables and you're done.
+
+For detailed setup: See RENDER_DEPLOYMENT_GUIDE.md
