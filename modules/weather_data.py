@@ -89,17 +89,33 @@ def fetch_historical_weather():
 def load_local_weather_data():
     """
     Load weather data from local CSV if available
+    Tries multiple locations: bangalore_rural_weather.csv first, then any *_weather.csv
     """
-    csv_path = Path("data/bangalore_rural_weather.csv")
+    data_dir = Path("data")
     
+    # Try primary file first
+    csv_path = data_dir / "bangalore_rural_weather.csv"
     if csv_path.exists():
         df = pd.read_csv(csv_path)
         df["date"] = pd.to_datetime(df["date"])
-        print(f"[OK] Loaded {len(df)} records from local CSV")
+        print(f"[OK] Loaded {len(df)} records from local CSV: {csv_path.name}")
         return df
-    else:
-        print("[ERROR] No local weather data found. Run fetch_historical_weather() first.")
-        return None
+    
+    # Fallback: try to find any location-specific weather CSV
+    csv_files = list(data_dir.glob("*_weather.csv"))
+    if csv_files:
+        csv_path = csv_files[0]  # Load the first available location
+        try:
+            df = pd.read_csv(csv_path)
+            df["date"] = pd.to_datetime(df["date"])
+            print(f"[OK] Loaded {len(df)} records from local CSV: {csv_path.name}")
+            return df
+        except Exception as e:
+            print(f"[ERROR] Failed to load CSV {csv_path}: {e}")
+            return None
+    
+    print("[ERROR] No local weather data found. Run fetch_historical_weather() first.")
+    return None
 
 
 def get_weather_data():
