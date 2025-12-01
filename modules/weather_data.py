@@ -15,13 +15,13 @@ BANGALORE_RURAL_LON = 77.5750
 
 def fetch_historical_weather():
     """
-    Fetch historical weather data from Open-Meteo for past 3 years
+    Fetch historical weather data from Open-Meteo for past 5 years
     Returns: pandas DataFrame with weather data
     """
     
-    # Calculate date range: last 3 years
+    # Calculate date range: last 5 years (reduced from 10 to avoid API 400 errors)
     end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=365*10)
+    start_date = end_date - timedelta(days=365*5)
     
     url = "https://archive-api.open-meteo.com/v1/archive"
     
@@ -38,12 +38,19 @@ def fetch_historical_weather():
     
     try:
         print(f"Fetching data from {start_date} to {end_date}...")
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         
+        # Check for API errors in response
+        if "error" in data and data["error"]:
+            raise Exception(f"API Error: {data.get('reason', 'Unknown error')}")
+        
         # Extract daily data
         daily_data = data.get("daily", {})
+        
+        if not daily_data or not daily_data.get("time"):
+            raise Exception("Invalid response from Open-Meteo API")
         
         # Create DataFrame
         df = pd.DataFrame({
@@ -66,7 +73,15 @@ def fetch_historical_weather():
         
         return df
         
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.Timeout:
+        print(f"[ERROR] Timeout fetching weather data from Open-Meteo (API took too long)")
+        return None
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] HTTP Error fetching weather data: {e}")
+        if e.response.status_code == 400:
+            print(f"[ERROR] Bad Request - check date range or parameters")
+        return None
+    except Exception as e:
         print(f"[ERROR] Error fetching weather data: {e}")
         return None
 

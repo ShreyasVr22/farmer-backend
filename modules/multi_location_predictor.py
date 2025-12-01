@@ -129,26 +129,50 @@ class LocationModel:
             # Load with safe deserialization to handle version compatibility
             import tensorflow as tf
             self.model = WeatherLSTMModel()
+            
+            # Strategy 1: Try standard load
             try:
                 self.model.load_model(str(self.model_path))
+                logger.info(f"  ✓ Standard load successful for {self.location_slug}")
             except Exception as load_error:
-                # Try alternative loading method for compatibility
-                logger.info(f"  Attempting safe load for {self.location_slug}...")
+                logger.debug(f"  Standard load error: {load_error}")
+                # Strategy 2: Try safe load without compilation
                 try:
-                    # Load without custom loss/metrics to avoid deserialization issues
+                    logger.info(f"  Attempting safe load (no compile) for {self.location_slug}...")
                     self.model.model = tf.keras.models.load_model(
                         str(self.model_path),
-                        compile=False  # Skip metric compilation
+                        compile=False
                     )
-                    # Recompile with current loss/metrics
                     self.model.model.compile(
                         optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
                         loss='mse',
                         metrics=['mae']
                     )
-                    logger.info(f"✓ Model loaded with safe compile for {self.location_slug}")
+                    logger.info(f"  ✓ Safe load successful for {self.location_slug}")
                 except Exception as safe_error:
-                    raise Exception(f"Could not load even with safe compile: {str(safe_error)}")
+                    logger.debug(f"  Safe load error: {safe_error}")
+                    # Strategy 3: Try with custom_objects for Keras compatibility
+                    try:
+                        logger.info(f"  Attempting custom object load for {self.location_slug}...")
+                        custom_objects = {
+                            'LSTM': tf.keras.layers.LSTM,
+                            'Dense': tf.keras.layers.Dense,
+                            'Dropout': tf.keras.layers.Dropout,
+                            'InputLayer': tf.keras.layers.InputLayer
+                        }
+                        self.model.model = tf.keras.models.load_model(
+                            str(self.model_path),
+                            compile=False,
+                            custom_objects=custom_objects
+                        )
+                        self.model.model.compile(
+                            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+                            loss='mse',
+                            metrics=['mae']
+                        )
+                        logger.info(f"  ✓ Custom object load successful for {self.location_slug}")
+                    except Exception as custom_error:
+                        raise Exception(f"Could not load model after 3 strategies: {str(custom_error)}")
             
             self.preprocessor = WeatherPreprocessor()
             
