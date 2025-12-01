@@ -13,7 +13,7 @@ from pathlib import Path
 BANGALORE_RURAL_LAT = 13.2256
 BANGALORE_RURAL_LON = 77.5750
 
-async def fetch_historical_weather():
+def fetch_historical_weather():
     """
     Fetch historical weather data from Open-Meteo for past 3 years
     Returns: pandas DataFrame with weather data
