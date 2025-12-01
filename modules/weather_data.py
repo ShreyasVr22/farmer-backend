@@ -67,7 +67,7 @@ async def fetch_historical_weather():
         return df
         
     except requests.exceptions.RequestException as e:
-        print(f"✗ Error fetching weather data: {e}")
+        print(f"[ERROR] Error fetching weather data: {e}")
         return None
 
 
@@ -80,10 +80,10 @@ def load_local_weather_data():
     if csv_path.exists():
         df = pd.read_csv(csv_path)
         df["date"] = pd.to_datetime(df["date"])
-        print(f"✓ Loaded {len(df)} records from local CSV")
+        print(f"[OK] Loaded {len(df)} records from local CSV")
         return df
     else:
-        print("✗ No local weather data found. Run fetch_historical_weather() first.")
+        print("[ERROR] No local weather data found. Run fetch_historical_weather() first.")
         return None
 
 

@@ -126,15 +126,19 @@ class WeatherPreprocessor:
         
         return (X_train, y_train), (X_val, y_val), (X_test, y_test)
     
-    def load_scaler(self):
+    def load_scaler(self, scaler_path=None):
         """
         Load saved scaler for inference
+        
+        Args:
+            scaler_path: Path to the scaler file. If None, uses self.scaler_path
         """
-        if self.scaler_path.exists():
-            self.scaler = joblib.load(self.scaler_path)
+        path = Path(scaler_path) if scaler_path else self.scaler_path
+        if path.exists():
+            self.scaler = joblib.load(str(path))
             return self.scaler
         else:
-            raise FileNotFoundError(f"Scaler not found at {self.scaler_path}")
+            raise FileNotFoundError(f"Scaler not found at {path}")
     
     def denormalize_predictions(self, predictions):
         """

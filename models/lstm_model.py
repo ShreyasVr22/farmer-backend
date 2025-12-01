@@ -18,10 +18,11 @@ from datetime import datetime
 class WeatherLSTMModel:
     """
     LSTM model for weather forecasting
-    Predicts: temp_max, temp_min, rainfall, wind_speed, humidity
+    Predicts: temp_max, temp_min, rainfall (3 features per timestep)
+    Architecture: 30-day sequence input -> 30-day sequence output
     """
     
-    def __init__(self, seq_length=30, n_features=5):
+    def __init__(self, seq_length=30, n_features=3):
         self.seq_length = seq_length
         self.n_features = n_features
         self.model = None
@@ -149,26 +150,33 @@ class WeatherLSTMModel:
     
     def load_model(self, model_path=None):
         """
-        Load saved model with compatibility fixes for InputLayer deserialization
-        Handles batch_shape -> input_shape conversion for TensorFlow version compatibility
+        Load saved model with compatibility fixes for TensorFlow version compatibility
+        Handles keras.metrics.mse deserialization and InputLayer issues
         """
         path = Path(model_path) if model_path else self.model_path
         if path.exists():
             try:
                 # Try standard loading first
-                self.model = load_model(str(path))
+                self.model = load_model(str(path), compile=False)
                 print(f"[OK] Model loaded from {path}")
                 return self.model
             except Exception as e:
-                # If standard load fails, try with custom_objects to handle InputLayer issues
-                print(f"  [Note] Standard load encountered issue, attempting with custom_objects...")
+                # If standard load fails, try with safe_mode and recompile
+                print(f"  [Note] Standard load encountered issue, attempting safe load...")
                 try:
-                    custom_objs = {'InputLayer': tf.keras.layers.InputLayer}
-                    self.model = load_model(str(path), custom_objects=custom_objs)
-                    print(f"[OK] Model loaded with custom objects from {path}")
+                    # Load without compiling first
+                    self.model = load_model(str(path), compile=False)
+                    
+                    # Recompile with fresh metrics
+                    self.model.compile(
+                        optimizer=Adam(learning_rate=0.001),
+                        loss='mse',
+                        metrics=['mae']
+                    )
+                    print(f"[OK] Model loaded and recompiled from {path}")
                     return self.model
                 except Exception as e2:
-                    error_msg = str(e2)[:100].encode('cp1252', errors='ignore').decode('cp1252')
+                    error_msg = str(e2)[:150]
                     print(f"[ERROR] Failed to load model: {error_msg}")
                     raise FileNotFoundError(f"Could not load model at {path}. Error: {str(e2)}")
         else:
@@ -189,12 +197,12 @@ class WeatherLSTMModel:
         Predict next 30 days given last 30 days of data
         
         Args:
-            last_30_days_normalized: Shape (30, 5) - normalized data
+            last_30_days_normalized: Shape (30, 3) - normalized data (30 days × 3 features)
         
         Returns:
-            predictions: Shape (30, 5) - predicted values (still normalized)
+            predictions: Shape (30, 3) - predicted values (still normalized)
         """
-        # Reshape for model input: (1, 30, 5)
+        # Reshape for model input: (1, 30, 3)
         X = last_30_days_normalized.reshape(1, self.seq_length, self.n_features)
         
         # Predict

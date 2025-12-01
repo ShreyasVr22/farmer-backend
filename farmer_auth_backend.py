@@ -360,9 +360,20 @@ async def test_login():
 
 
 if __name__ == "__main__":
-    print("🌾 Farmer Authentication Backend Ready!")
-    print("\nTest endpoints:")
-    print("POST /auth/register - Register new farmer")
-    print("POST /auth/login - Login farmer")
-    print("GET /profile?token=TOKEN - Get farmer profile")
-    print("PUT /profile/update?token=TOKEN - Update profile")
+    import uvicorn
+    print("\n" + "="*70)
+    print("[AUTH] Farmer Authentication Backend Starting")
+    print("="*70)
+    print("\nAvailable endpoints:")
+    print("  POST /auth/register  - Register new farmer")
+    print("  POST /auth/login     - Login farmer")
+    print("  GET /profile         - Get farmer profile")
+    print("  PUT /profile/update  - Update profile")
+    print("="*70 + "\n")
+    
+    uvicorn.run(
+        "farmer_auth_backend:app",
+        host="0.0.0.0",
+        port=8001,
+        log_level="info"
+    )

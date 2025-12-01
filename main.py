@@ -11,6 +11,13 @@ from typing import Dict, Optional
 from datetime import datetime
 from pathlib import Path
 import logging
+import os
+import time
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', '')
 
 # Import custom modules
 from modules.weather_data import get_weather_data
@@ -38,6 +45,7 @@ app.add_middleware(
 
 # Global state
 predictor = None
+cached_weather_data = None  # Cache historical data at startup
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -76,16 +84,31 @@ class ForecastResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """
-    Initialize multi-location predictor on startup
+    Initialize multi-location predictor and cache weather data on startup
+    This prevents blocking API calls during request handling
     """
-    global predictor
+    global predictor, cached_weather_data
+    start_time = time.time()
+    
     try:
         logger.info("Initializing Multi-Location Predictor...")
         predictor = MultiLocationPredictor()
         logger.info(f"✓ Predictor initialized successfully")
         logger.info(f"✓ Loaded {len(predictor.models)} location-specific models")
+        
+        # Load weather data once at startup
+        logger.info("Loading historical weather data...")
+        cached_weather_data = get_weather_data()
+        if cached_weather_data is not None:
+            logger.info(f"✓ Cached {len(cached_weather_data)} historical weather records")
+        else:
+            logger.warning("Failed to cache weather data - will attempt to load on first request")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"✓ Startup completed in {elapsed:.2f}s")
+        
     except Exception as e:
-        logger.error(f"✗ Error initializing predictor: {e}")
+        logger.error(f"✗ Error during startup: {e}")
         logger.warning("Predictor will be initialized on first prediction request")
 
 @app.on_event("shutdown")
@@ -95,25 +118,7 @@ async def shutdown_event():
     """
     logger.info("Shutting down Weather Prediction API")
 
-# ==================== ROOT ENDPOINT ====================
-
-@app.get("/")
-async def root():
-    """
-    Root endpoint - API information
-    """
-    return {
-        "service": "Farmer Assistant - Weather Prediction API",
-        "version": "1.0.0",
-        "description": "LSTM-based weather forecasting for Bangalore & surrounding districts",
-        "endpoints": {
-            "health": "/health",
-            "forecast_30_days": "/predict/next-month",
-            "forecast_specific_date": "/predict/specific-date/{date}",
-            "docs": "/docs",
-            "openapi_schema": "/openapi.json"
-        }
-    }
+# ==================== REMOVED DUPLICATE ROOT - See line 476 ====================
 
 # ==================== HEALTH CHECK ====================
 
@@ -134,7 +139,7 @@ async def health_check():
 
 # ==================== PREDICTION ENDPOINTS ====================
 
-@app.post("/predict/next-month", response_model=ForecastResponse)
+@app.post("/predict/next-month")
 async def get_30_day_forecast(request: ForecastRequest):
     """
     Get 30-day weather forecast for any location
@@ -146,11 +151,12 @@ async def get_30_day_forecast(request: ForecastRequest):
         location: Location name for reference
     
     Returns:
-        - 30 daily forecasts (temp_max, temp_min, rainfall, wind_speed, humidity)
+        - 30 daily forecasts (temp_max, temp_min, rainfall)
         - Summary statistics
         - Weather alerts for farmers
     """
-    global predictor
+    global predictor, cached_weather_data
+    start_time = time.time()
     
     try:
         # Initialize predictor if not already done
@@ -158,11 +164,15 @@ async def get_30_day_forecast(request: ForecastRequest):
             logger.info("Initializing predictor on-demand...")
             predictor = MultiLocationPredictor()
         
-        logger.info(f"Generating forecast for {request.location} ({request.latitude}, {request.longitude})")
+        logger.info(f"[{time.time() - start_time:.2f}s] Generating forecast for {request.location}")
         
-        # Load historical weather data for normalization reference
-        logger.info("Loading historical weather data...")
-        historical_df = get_weather_data()
+        # Use cached weather data, avoid blocking API calls
+        if cached_weather_data is not None:
+            historical_df = cached_weather_data
+            logger.debug(f"[{time.time() - start_time:.2f}s] Using cached weather data")
+        else:
+            logger.info(f"[{time.time() - start_time:.2f}s] Loading weather data (cache miss)...")
+            historical_df = get_weather_data()
         
         if historical_df is None or len(historical_df) < 30:
             raise HTTPException(
@@ -173,25 +183,30 @@ async def get_30_day_forecast(request: ForecastRequest):
         logger.info(f"Loaded {len(historical_df)} historical records")
         
         # Generate predictions using location-specific model
-        logger.info(f"Generating 30-day forecast using {request.location} model...")
+        logger.info(f"[{time.time() - start_time:.2f}s] Generating 30-day forecast using {request.location} model...")
         predictions = predictor.predict_next_month(historical_df, request.location)
+        logger.debug(f"[{time.time() - start_time:.2f}s] Prediction completed")
         
-        # Format response
+        # Format response (already includes status and data)
         response = predictor.format_for_response(predictions, include_alerts=True)
-        response["timestamp"] = datetime.now().isoformat()
-        response["location"] = request.location
-        response["coordinates"] = {
+        
+        # Add metadata
+        response["data"]["location"] = request.location
+        response["data"]["coordinates"] = {
             "latitude": request.latitude,
             "longitude": request.longitude
         }
+        response["timestamp"] = datetime.now().isoformat()
         
-        logger.info(f"✓ Forecast generated successfully for {request.location}")
+        elapsed = time.time() - start_time
+        logger.info(f"✓ Forecast generated in {elapsed:.2f}s for {request.location}")
         return response
         
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error(f"✗ Error generating forecast: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"✗ Error generating forecast after {elapsed:.2f}s: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(
@@ -215,15 +230,21 @@ async def get_prediction_for_date(
         longitude: Location longitude (default: Bangalore Rural)
         location: Location name for reference
     """
-    global predictor
+    global predictor, cached_weather_data
+    start_time = time.time()
     
     try:
         if predictor is None:
             predictor = MultiLocationPredictor()
         
-        logger.info(f"Fetching prediction for {location} on {date}")
+        logger.info(f"[{time.time() - start_time:.2f}s] Fetching prediction for {location} on {date}")
         
-        historical_df = get_weather_data()
+        # Use cached weather data
+        if cached_weather_data is not None:
+            historical_df = cached_weather_data
+        else:
+            historical_df = get_weather_data()
+        
         predictions = predictor.predict_next_month(historical_df, location)
         
         # Filter for specific date
@@ -236,6 +257,8 @@ async def get_prediction_for_date(
             )
         
         row = prediction.iloc[0]
+        elapsed = time.time() - start_time
+        logger.info(f"✓ Prediction fetched in {elapsed:.2f}s for {location}")
         
         return {
             "status": "success",
@@ -243,9 +266,7 @@ async def get_prediction_for_date(
                 "date": str(row['date']),
                 "temp_max": float(row['temp_max']),
                 "temp_min": float(row['temp_min']),
-                "rainfall": float(row['rainfall']),
-                "wind_speed": float(row['wind_speed']),
-                "humidity": float(row['humidity'])
+                "rainfall": float(row['rainfall'])
             },
             "location": location,
             "coordinates": {
@@ -258,7 +279,8 @@ async def get_prediction_for_date(
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error(f"Error fetching prediction: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"Error fetching prediction after {elapsed:.2f}s: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== REAL-TIME WEATHER ENDPOINT ====================
@@ -281,8 +303,11 @@ async def get_realtime_weather(
     Returns:
         Current weather conditions with alert levels
     """
+    start_time = time.time()
     try:
         import requests
+        
+        logger.info(f"[{time.time() - start_time:.2f}s] Fetching real-time weather for {location} ({lat}, {lon})")
         
         # Open-Meteo current weather API
         url = "https://api.open-meteo.com/v1/forecast"
@@ -294,9 +319,13 @@ async def get_realtime_weather(
             "wind_speed_unit": "ms"
         }
         
-        response = requests.get(url, params=params, timeout=10)
+        # Don't add API key - it causes issues with routing
+        # The free tier is sufficient for our use case
+        logger.debug(f"[{time.time() - start_time:.2f}s] Making API request to Open-Meteo...")
+        response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         data = response.json()
+        logger.debug(f"[{time.time() - start_time:.2f}s] API response received")
         
         current = data.get("current", {})
         
@@ -362,23 +391,29 @@ async def get_realtime_weather(
             "timestamp": datetime.now().isoformat()
         }
         
-        logger.info(f"✓ Real-time weather fetched for {location}: {temp}°C, {humidity}% RH")
+        elapsed = time.time() - start_time
+        logger.info(f"✓ Real-time weather fetched in {elapsed:.2f}s for {location}: {temp}°C, {humidity}% RH")
         return response_data
         
     except requests.exceptions.Timeout:
-        logger.warning(f"Real-time weather request timed out for {location}")
+        elapsed = time.time() - start_time
+        logger.warning(f"Real-time weather request timed out after {elapsed:.2f}s for {location}")
         raise HTTPException(
             status_code=504,
             detail="Real-time weather service timed out. Using fallback to forecast."
         )
-    except requests.exceptions.ConnectionError:
-        logger.warning(f"Connection error fetching real-time weather for {location}")
+    except requests.exceptions.ConnectionError as e:
+        elapsed = time.time() - start_time
+        logger.warning(f"Connection error after {elapsed:.2f}s fetching real-time weather for {location}: {e}")
         raise HTTPException(
             status_code=503,
             detail="Real-time weather service unavailable. Using fallback to forecast."
         )
     except Exception as e:
-        logger.error(f"Error fetching real-time weather: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"Error fetching real-time weather after {elapsed:.2f}s: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching real-time weather: {str(e)}"
@@ -496,10 +531,20 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    print("\n" + "="*70)
+    print("🚀 FARMER ASSISTANT BACKEND STARTING")
+    print("="*70)
+    print("\n✅ Backend will be available at: http://localhost:8000")
+    print("   (NOT http://0.0.0.0:8000 - that's for the server, not browser!)")
+    print("\n📝 Configure your frontend to use: http://localhost:8000")
+    print("   If deployed remotely, use the actual server IP/domain")
+    print("\n📚 API Documentation: http://localhost:8000/docs")
+    print("="*70 + "\n")
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,
         log_level="info"
     )

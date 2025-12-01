@@ -126,12 +126,38 @@ class LocationModel:
                 logger.warning(f"Model not found for {self.location_slug}: {self.model_path}")
                 return False
             
+            # Load with safe deserialization to handle version compatibility
+            import tensorflow as tf
             self.model = WeatherLSTMModel()
-            self.model.load_model(str(self.model_path))
+            try:
+                self.model.load_model(str(self.model_path))
+            except Exception as load_error:
+                # Try alternative loading method for compatibility
+                logger.info(f"  Attempting safe load for {self.location_slug}...")
+                try:
+                    # Load without custom loss/metrics to avoid deserialization issues
+                    self.model.model = tf.keras.models.load_model(
+                        str(self.model_path),
+                        compile=False  # Skip metric compilation
+                    )
+                    # Recompile with current loss/metrics
+                    self.model.model.compile(
+                        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+                        loss='mse',
+                        metrics=['mae']
+                    )
+                    logger.info(f"✓ Model loaded with safe compile for {self.location_slug}")
+                except Exception as safe_error:
+                    raise Exception(f"Could not load even with safe compile: {str(safe_error)}")
             
             self.preprocessor = WeatherPreprocessor()
+            
+            # Load the scaler if it exists
             if self.scaler_path.exists():
                 self.preprocessor.load_scaler(str(self.scaler_path))
+                logger.info(f"✓ Scaler loaded for {self.location_slug}")
+            else:
+                logger.warning(f"Scaler not found for {self.location_slug}: {self.scaler_path}")
             
             self.is_loaded = True
             logger.info(f"✓ Loaded model for {self.location_slug}")
@@ -148,24 +174,30 @@ class LocationModel:
         
         try:
             # Select only available feature columns (3 core: temp_max, temp_min, rainfall)
-            feature_columns = [col for col in ["temp_max", "temp_min", "rainfall", "wind_speed", "humidity"] 
+            # Models are trained with exactly 3 features
+            feature_columns = [col for col in ["temp_max", "temp_min", "rainfall"] 
                              if col in historical_data_df.columns]
             
-            if len(feature_columns) < 3:
-                logger.warning(f"Insufficient features for {self.location_slug}: {feature_columns}")
+            if len(feature_columns) != 3:
+                # Ensure we have exactly 3 features for model input
+                logger.warning(f"Expected 3 features for {self.location_slug}, found: {feature_columns}")
                 feature_columns = ["temp_max", "temp_min", "rainfall"]
             
-            # Get last 30 days
+            # Get last 30 days of data
             last_30_days = historical_data_df[feature_columns].tail(30).values
+            logger.debug(f"Input shape before normalization: {last_30_days.shape} (expected: (30, 3))")
             
-            # Normalize
+            # Normalize using the location's fitted scaler
             last_30_days_normalized = self.preprocessor.scaler.transform(last_30_days)
+            logger.debug(f"Input shape after normalization: {last_30_days_normalized.shape}")
             
             # Predict
             predictions_normalized = self.model.predict_next_30_days(last_30_days_normalized)
+            logger.debug(f"Prediction shape (normalized): {predictions_normalized.shape} (expected: (30, 3))")
             
             # Denormalize
             predictions = self.preprocessor.denormalize_predictions(predictions_normalized)
+            logger.debug(f"Prediction shape (denormalized): {predictions.shape}")
             
             # Create DataFrame
             start_date = pd.to_datetime(historical_data_df['date'].max()) + timedelta(days=1)
@@ -206,8 +238,8 @@ class MultiLocationPredictor:
             logger.warning(f"Models directory not found: {self.model_dir}")
             return
         
-        # Find all .h5 files
-        model_files = list(self.model_dir.glob("lstm_*.h5"))
+        # Find all .h5 files (excluding .backup files)
+        model_files = [f for f in self.model_dir.glob("lstm_*.h5") if not str(f).endswith('.backup')]
         logger.info(f"Found {len(model_files)} model files")
         
         for model_file in model_files:
@@ -305,11 +337,23 @@ class MultiLocationPredictor:
         heavy_rain_days = predictions_df[predictions_df['rainfall'] > 50]
         alerts["heavy_rainfall"] = len(heavy_rain_days)
         
+        # Determine appropriate "no rain" threshold for drought detection
+        # Use adaptive threshold based on data range
+        rainfall_values = predictions_df['rainfall'].values
+        rainfall_max = float(np.max(rainfall_values))
+        
+        if rainfall_max < 1.0:
+            no_rain_threshold = 0.5
+        elif rainfall_max < 5.0:
+            no_rain_threshold = 1.0
+        else:
+            no_rain_threshold = 5.0
+        
         # Check for drought (>15 consecutive days without rain)
         dry_streak = 0
         max_dry_streak = 0
-        for rain in predictions_df['rainfall'].values:
-            if rain < 5:
+        for rain in rainfall_values:
+            if rain < no_rain_threshold:
                 dry_streak += 1
                 max_dry_streak = max(max_dry_streak, dry_streak)
             else:
@@ -337,15 +381,49 @@ class MultiLocationPredictor:
         if predictions_df is None or predictions_df.empty:
             return {}
         
+        # Calculate stats with NaN handling
+        avg_max = float(predictions_df['temp_max'].mean())
+        avg_min = float(predictions_df['temp_min'].mean())
+        max_temp = float(predictions_df['temp_max'].max())
+        min_temp = float(predictions_df['temp_min'].min())
+        total_rain = float(predictions_df['rainfall'].sum())
+        avg_rain = float(predictions_df['rainfall'].mean())
+        
+        # Replace NaN/inf with 0 as fallback
+        avg_max = 0 if (np.isnan(avg_max) or np.isinf(avg_max)) else avg_max
+        avg_min = 0 if (np.isnan(avg_min) or np.isinf(avg_min)) else avg_min
+        max_temp = 0 if (np.isnan(max_temp) or np.isinf(max_temp)) else max_temp
+        min_temp = 0 if (np.isnan(min_temp) or np.isinf(min_temp)) else min_temp
+        total_rain = 0 if (np.isnan(total_rain) or np.isinf(total_rain)) else total_rain
+        avg_rain = 0 if (np.isnan(avg_rain) or np.isinf(avg_rain)) else avg_rain
+        
+        # Determine rainy vs dry days using adaptive threshold
+        # If all values are very low (< 1mm), use 0.5mm threshold instead of 5mm
+        rainfall_values = predictions_df['rainfall'].values
+        rainfall_max = float(np.max(rainfall_values))
+        
+        if rainfall_max < 1.0:
+            # Use 0.5mm threshold for very low rainfall predictions
+            rain_threshold = 0.5
+        elif rainfall_max < 5.0:
+            # Use 1mm threshold for low rainfall predictions
+            rain_threshold = 1.0
+        else:
+            # Use standard 5mm threshold for normal rainfall predictions
+            rain_threshold = 5.0
+        
+        rainy_days = int((rainfall_values > rain_threshold).sum())
+        dry_days = int((rainfall_values <= rain_threshold).sum())
+        
         return {
-            "avg_max_temp": float(predictions_df['temp_max'].mean()),
-            "avg_min_temp": float(predictions_df['temp_min'].mean()),
-            "max_temperature": float(predictions_df['temp_max'].max()),
-            "min_temperature": float(predictions_df['temp_min'].min()),
-            "total_rainfall": float(predictions_df['rainfall'].sum()),
-            "avg_daily_rainfall": float(predictions_df['rainfall'].mean()),
-            "rainy_days": int((predictions_df['rainfall'] > 5).sum()),
-            "dry_days": int((predictions_df['rainfall'] <= 5).sum())
+            "avg_max_temp": avg_max,
+            "avg_min_temp": avg_min,
+            "max_temperature": max_temp,
+            "min_temperature": min_temp,
+            "total_rainfall": total_rain,
+            "avg_daily_rainfall": avg_rain,
+            "rainy_days": rainy_days,
+            "dry_days": dry_days
         }
     
     def format_for_response(self, predictions_df: pd.DataFrame, include_alerts: bool = True) -> dict:
