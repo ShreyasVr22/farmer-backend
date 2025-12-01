@@ -184,7 +184,8 @@ async def get_30_day_forecast(request: ForecastRequest):
         
         # Generate predictions using location-specific model
         logger.info(f"[{time.time() - start_time:.2f}s] Generating 30-day forecast using {request.location} model...")
-        predictions = predictor.predict_next_month(historical_df, request.location)
+        from starlette.concurrency import run_in_threadpool
+        predictions = await run_in_threadpool(predictor.predict_next_month, historical_df, request.location)
         logger.debug(f"[{time.time() - start_time:.2f}s] Prediction completed")
         
         # Format response (already includes status and data)
