@@ -12,3 +12,4 @@ aiohttp==3.9.1
 pydantic==2.5.0
 sqlalchemy>=2.0.0
 pyjwt>=2.8.0
+h5py==3.10.0
