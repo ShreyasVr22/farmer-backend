@@ -5,7 +5,11 @@ services:
     plan: free
     pythonVersion: 3.11.7
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.7
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-farmer-db
+          property: connectionString

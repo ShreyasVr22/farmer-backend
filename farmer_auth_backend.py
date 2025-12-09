@@ -6,20 +6,53 @@ No complex security requirements - Farmer-friendly!
 
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, Column, String, Integer, DateTime
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.engine import URL
 from datetime import datetime, timedelta
 import jwt
 import os
 from dotenv import load_dotenv
 from typing import Optional
+from urllib.parse import quote_plus, urlparse
 
 load_dotenv()
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./farmers.db")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+
+# Handle PostgreSQL URL encoding for special characters in password
+if "postgresql" in DATABASE_URL.lower() or "postgres" in DATABASE_URL.lower():
+    try:
+        # For Render PostgreSQL URLs with special characters
+        # Parse it safely
+        parsed = urlparse(DATABASE_URL)
+        
+        # Extract components
+        username = parsed.username or os.getenv("DATABASE_USER", parsed.username)
+        password = parsed.password or os.getenv("DATABASE_PASSWORD", parsed.password)
+        host = parsed.hostname or os.getenv("DATABASE_HOST", parsed.hostname)
+        port = parsed.port or int(os.getenv("DATABASE_PORT", 5432))
+        database = parsed.path.lstrip('/') or os.getenv("DATABASE_NAME", "farmers")
+        
+        # Create URL with proper encoding
+        if username and password:
+            # Properly encode the password to handle special characters
+            encoded_password = quote_plus(password) if password else ""
+            db_url = f"postgresql+psycopg2://{username}:{encoded_password}@{host}:{port}/{database}"
+        else:
+            db_url = DATABASE_URL
+        
+        engine = create_engine(db_url, pool_pre_ping=True, connect_args={"connect_timeout": 10})
+    except Exception as e:
+        print(f"Failed to parse PostgreSQL URL: {e}")
+        print("Using DATABASE_URL as fallback")
+        # Try direct string format
+        engine = create_engine(DATABASE_URL)
+else:
+    # SQLite - use default
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
