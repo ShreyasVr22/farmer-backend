@@ -21,39 +21,63 @@ load_dotenv()
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./farmers.db")
+DATABASE_MODE = os.getenv("DATABASE_MODE", "auto")  # auto, sqlite, or postgresql
 
+print(f"[DB] Database mode: {DATABASE_MODE}")
 print(f"[DB] Attempting to initialize database...")
 
 # Build database engine with better error handling
 engine = None
 
-# Check if we're using PostgreSQL
-if "postgresql" in DATABASE_URL.lower() or "postgres" in DATABASE_URL.lower():
-    print("[DB] PostgreSQL URL detected, attempting connection...")
+# If explicitly set to sqlite, use that
+if DATABASE_MODE == "sqlite":
+    print("[DB] Using SQLite (as configured)")
+    engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
+    print("[DB] ✓ SQLite database ready")
+
+# If explicitly set to postgresql, use that
+elif DATABASE_MODE == "postgresql":
+    print("[DB] Using PostgreSQL (as configured)")
     try:
-        # Try direct connection first
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
             connect_args={"connect_timeout": 10}
         )
         print("[DB] ✓ PostgreSQL connected")
-    except ValueError as e:
-        if "Port could not be cast to integer" in str(e) or "invalid literal for int()" in str(e):
-            print(f"[DB] ⚠ PostgreSQL URL parsing failed: {str(e)[:100]}")
-            print("[DB] Render may have provided an invalid DATABASE_URL")
-            print("[DB] Falling back to SQLite for development/testing")
-            engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
-        else:
-            raise
     except Exception as e:
-        print(f"[DB] PostgreSQL connection error: {e}")
-        print("[DB] Falling back to SQLite")
-        engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
+        print(f"[DB] PostgreSQL error: {e}")
+        raise
+
+# Auto mode - detect from DATABASE_URL
 else:
-    # Use SQLite
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-    print("[DB] ✓ SQLite database ready")
+    if "postgresql" in DATABASE_URL.lower() or "postgres" in DATABASE_URL.lower():
+        print("[DB] PostgreSQL URL detected, attempting connection...")
+        try:
+            engine = create_engine(
+                DATABASE_URL,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": 10}
+            )
+            print("[DB] ✓ PostgreSQL connected successfully")
+        except ValueError as e:
+            if "Port could not be cast to integer" in str(e) or "invalid literal for int()" in str(e):
+                print(f"[DB] ⚠ PostgreSQL URL parsing failed")
+                print(f"[DB] Error details: {str(e)[:100]}")
+                print("[DB] Falling back to SQLite for development/testing")
+                engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
+                print("[DB] ✓ SQLite fallback ready")
+            else:
+                raise
+        except Exception as e:
+            print(f"[DB] PostgreSQL connection failed: {e}")
+            print("[DB] Falling back to SQLite")
+            engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
+            print("[DB] ✓ SQLite fallback ready")
+    else:
+        # Use SQLite
+        engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+        print("[DB] ✓ SQLite database ready")
 
 if engine is None:
     raise RuntimeError("Failed to create database engine")
