@@ -22,37 +22,41 @@ load_dotenv()
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./farmers.db")
 
-# Handle PostgreSQL URL encoding for special characters in password
+print(f"[DB] Attempting to initialize database...")
+
+# Build database engine with better error handling
+engine = None
+
+# Check if we're using PostgreSQL
 if "postgresql" in DATABASE_URL.lower() or "postgres" in DATABASE_URL.lower():
+    print("[DB] PostgreSQL URL detected, attempting connection...")
     try:
-        # For Render PostgreSQL URLs with special characters
-        # Parse it safely
-        parsed = urlparse(DATABASE_URL)
-        
-        # Extract components
-        username = parsed.username or os.getenv("DATABASE_USER", parsed.username)
-        password = parsed.password or os.getenv("DATABASE_PASSWORD", parsed.password)
-        host = parsed.hostname or os.getenv("DATABASE_HOST", parsed.hostname)
-        port = parsed.port or int(os.getenv("DATABASE_PORT", 5432))
-        database = parsed.path.lstrip('/') or os.getenv("DATABASE_NAME", "farmers")
-        
-        # Create URL with proper encoding
-        if username and password:
-            # Properly encode the password to handle special characters
-            encoded_password = quote_plus(password) if password else ""
-            db_url = f"postgresql+psycopg2://{username}:{encoded_password}@{host}:{port}/{database}"
+        # Try direct connection first
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10}
+        )
+        print("[DB] ✓ PostgreSQL connected")
+    except ValueError as e:
+        if "Port could not be cast to integer" in str(e) or "invalid literal for int()" in str(e):
+            print(f"[DB] ⚠ PostgreSQL URL parsing failed: {str(e)[:100]}")
+            print("[DB] Render may have provided an invalid DATABASE_URL")
+            print("[DB] Falling back to SQLite for development/testing")
+            engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
         else:
-            db_url = DATABASE_URL
-        
-        engine = create_engine(db_url, pool_pre_ping=True, connect_args={"connect_timeout": 10})
+            raise
     except Exception as e:
-        print(f"Failed to parse PostgreSQL URL: {e}")
-        print("Using DATABASE_URL as fallback")
-        # Try direct string format
-        engine = create_engine(DATABASE_URL)
+        print(f"[DB] PostgreSQL connection error: {e}")
+        print("[DB] Falling back to SQLite")
+        engine = create_engine("sqlite:///./farmers.db", connect_args={"check_same_thread": False})
 else:
-    # SQLite - use default
+    # Use SQLite
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    print("[DB] ✓ SQLite database ready")
+
+if engine is None:
+    raise RuntimeError("Failed to create database engine")
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
