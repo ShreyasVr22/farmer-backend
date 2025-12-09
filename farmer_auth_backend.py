@@ -92,6 +92,12 @@ class TokenResponse(BaseModel):
     farmer: FarmerProfile
 
 
+class FarmerForgotPassword(BaseModel):
+    """Forgot password request"""
+    phone_number: str
+    new_password: str
+
+
 # ✅ DATABASE FUNCTIONS
 def get_db():
     """Get database session"""
@@ -333,6 +339,39 @@ async def verify_token_endpoint(token: str):
     }
 
 
+@router.post("/auth/forgot-password")
+async def forgot_password(forgot_data: FarmerForgotPassword, db: Session = Depends(get_db)):
+    """
+    Reset password for a farmer using phone number
+    
+    Requirements:
+    - Phone number: 10 digits (Indian mobile)
+    - New password: Any characters, any length
+    """
+    
+    # Validate phone number
+    if not validate_phone_number(forgot_data.phone_number):
+        raise HTTPException(status_code=400, detail="Phone number must be 10 digits")
+    
+    # Find farmer
+    farmer = db.query(Farmer).filter(
+        Farmer.phone_number == forgot_data.phone_number
+    ).first()
+    
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+    
+    # Update password
+    farmer.password = hash_password(forgot_data.new_password)
+    db.commit()
+    db.refresh(farmer)
+    
+    return {
+        "message": "Password reset successfully",
+        "farmer": FarmerProfile.from_orm(farmer)
+    }
+
+
 # ✅ TEST ENDPOINTS
 @router.get("/test/register-farmer")
 async def test_register():
@@ -358,6 +397,29 @@ async def test_login():
             "password": "any_password_123"
         }
     }
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(payload: FarmerForgotPassword, db: Session = Depends(get_db)):
+    """
+    Reset farmer password using phone number.
+
+    Expects JSON: { "phone_number": "9876543210", "new_password": "newpass123" }
+    """
+
+    # Validate phone number format
+    if not validate_phone_number(payload.phone_number):
+        raise HTTPException(status_code=400, detail="Phone number must be 10 digits")
+
+    farmer = db.query(Farmer).filter(Farmer.phone_number == payload.phone_number).first()
+    if not farmer:
+        raise HTTPException(status_code=404, detail="Farmer not found")
+
+    # Update password (simple hash used in this project)
+    farmer.password = hash_password(payload.new_password)
+    db.commit()
+
+    return {"message": "Password updated successfully"}
 
 
 # Create FastAPI app for standalone execution and include router
