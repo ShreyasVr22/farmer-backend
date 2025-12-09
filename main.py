@@ -103,11 +103,12 @@ async def startup_event():
         
         # Load weather data once at startup
         logger.info("Loading historical weather data...")
+        logger.info(f"Current working directory: {os.getcwd()}")
         cached_weather_data = get_weather_data()
-        if cached_weather_data is not None:
+        if cached_weather_data is not None and len(cached_weather_data) > 0:
             logger.info(f"✓ Cached {len(cached_weather_data)} historical weather records")
         else:
-            logger.warning("Failed to cache weather data - will attempt to load on first request")
+            logger.warning(f"⚠️ No weather data loaded (data={cached_weather_data})")
         
         elapsed = time.time() - start_time
         logger.info(f"✓ Startup completed in {elapsed:.2f}s")

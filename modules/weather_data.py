@@ -90,9 +90,26 @@ def load_local_weather_data():
     """
     Load weather data from local CSV if available
     Tries bangalore_rural_weather.csv first, then any *_weather.csv
+    Uses multiple path resolution strategies for robustness
     """
-    # Use absolute path relative to this module's location
-    data_dir = Path(__file__).parent.parent / "data"
+    # Try multiple path strategies to find data directory
+    possible_paths = [
+        Path(__file__).parent.parent / "data",  # Relative to this module (modules/weather_data.py)
+        Path.cwd() / "data",                     # Current working directory
+        Path("/app/data"),                       # Render default path
+        Path("/workspace/data"),                 # VSCode workspace path
+    ]
+    
+    data_dir = None
+    for path in possible_paths:
+        if path.exists() and path.is_dir():
+            data_dir = path
+            print(f"[INFO] Found data directory at: {data_dir}")
+            break
+    
+    if data_dir is None:
+        print(f"[ERROR] Data directory not found. Tried paths: {possible_paths}")
+        return None
     
     # Try primary file first
     csv_path = data_dir / "bangalore_rural_weather.csv"
@@ -125,7 +142,7 @@ def load_local_weather_data():
                 print(f"[WARNING] Failed to load CSV {csv_path}: {e}")
                 continue
     
-    print("[ERROR] No local weather data found")
+    print("[ERROR] No local weather data found in data directory")
     return None
 
 
