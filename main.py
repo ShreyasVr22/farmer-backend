@@ -8,7 +8,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+import pandas as pd
+import asyncio
 from pathlib import Path
 import logging
 import os
@@ -18,6 +20,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', '')
+# Cache configuration (hours). Set to 0 to disable periodic refresh.
+CACHE_REFRESH_HOURS = float(os.getenv('CACHE_REFRESH_HOURS', '6'))
+# If true, invalidate cached data on every prediction request
+CACHE_INVALIDATE_ON_REQUEST = os.getenv('CACHE_INVALIDATE_ON_REQUEST', 'false').lower() in ('1', 'true', 'yes')
+# Enable test-only endpoints (default: disabled)
+ENABLE_TEST_ENDPOINTS = os.getenv('ENABLE_TEST_ENDPOINTS', 'false').lower() in ('1', 'true', 'yes')
 
 # Import custom modules
 from modules.weather_data import get_weather_data
@@ -51,6 +59,8 @@ app.include_router(auth_router)
 # Global state
 predictor = None
 cached_weather_data = None  # Cache historical data at startup
+# Background task handle for periodic cache refresh
+_cache_refresh_task = None
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -112,7 +122,40 @@ async def startup_event():
         
         elapsed = time.time() - start_time
         logger.info(f"✓ Startup completed in {elapsed:.2f}s")
-        
+        # Start periodic cache refresher if enabled
+        global _cache_refresh_task, CACHE_REFRESH_HOURS
+        if CACHE_REFRESH_HOURS and CACHE_REFRESH_HOURS > 0:
+            async def _cache_refresher(hours: float):
+                """Background task to periodically refresh cached_weather_data"""
+                global cached_weather_data
+                while True:
+                    try:
+                        await asyncio.sleep(hours * 3600)
+                        logger.info("Periodic cache refresher: reloading weather data...")
+                        new_data = get_weather_data()
+                        if new_data is not None and len(new_data) > 0:
+                            cached_weather_data = new_data
+                            logger.info("Periodic cache refresher: cache updated")
+                        else:
+                            logger.warning("Periodic cache refresher: loaded empty data, keeping existing cache")
+                    except asyncio.CancelledError:
+                        logger.info("Periodic cache refresher: cancelled")
+                        break
+                    except Exception as e:
+                        logger.error(f"Periodic cache refresher error: {e}")
+
+            # schedule the refresher
+            try:
+                _cache_refresh_task = asyncio.create_task(_cache_refresher(CACHE_REFRESH_HOURS))
+                logger.info(f"Started cache refresher task every {CACHE_REFRESH_HOURS} hours")
+            except Exception as e:
+                logger.warning(f"Could not start cache refresher task: {e}")
+        # Log whether test endpoints are enabled
+        global ENABLE_TEST_ENDPOINTS
+        if ENABLE_TEST_ENDPOINTS:
+            logger.warning("Test-only endpoints are ENABLED (ENABLE_TEST_ENDPOINTS=true). Do not expose this in production.")
+        else:
+            logger.info("Test-only endpoints are disabled")
     except Exception as e:
         logger.error(f"✗ Error during startup: {e}")
         logger.warning("Predictor will be initialized on first prediction request")
@@ -123,6 +166,15 @@ async def shutdown_event():
     Cleanup on shutdown
     """
     logger.info("Shutting down Weather Prediction API")
+    # Cancel cache refresher if running
+    global _cache_refresh_task
+    try:
+        if _cache_refresh_task is not None:
+            _cache_refresh_task.cancel()
+            _cache_refresh_task = None
+            logger.info("Cancelled cache refresher task")
+    except Exception:
+        pass
 
 # ==================== REMOVED DUPLICATE ROOT - See line 476 ====================
 
@@ -172,13 +224,30 @@ async def get_30_day_forecast(request: ForecastRequest):
         
         logger.info(f"[{time.time() - start_time:.2f}s] Generating forecast for {request.location}")
         
-        # Use cached weather data, avoid blocking API calls
-        if cached_weather_data is not None:
-            historical_df = cached_weather_data
-            logger.debug(f"[{time.time() - start_time:.2f}s] Using cached weather data")
-        else:
-            logger.info(f"[{time.time() - start_time:.2f}s] Loading weather data (cache miss)...")
+        # If configured to invalidate cache on every request, reload data
+        if CACHE_INVALIDATE_ON_REQUEST:
+            logger.info("CACHE_INVALIDATE_ON_REQUEST enabled; reloading weather data for this request...")
             historical_df = get_weather_data()
+        else:
+            # Use cached weather data when fresh; otherwise reload to avoid stale dates
+            if cached_weather_data is not None:
+                try:
+                    cached_max = pd.to_datetime(cached_weather_data['date'].max()).date()
+                    # If cached data is older than yesterday, refresh it
+                    if cached_max < (datetime.now().date() - timedelta(days=1)):
+                        logger.info("Cached weather data is stale; refreshing from source...")
+                        cached_weather_data = get_weather_data()
+                    else:
+                        logger.debug(f"[{time.time() - start_time:.2f}s] Using cached weather data")
+                except Exception:
+                    # If parsing fails for any reason, attempt to reload
+                    logger.info("Could not determine cached data date; reloading weather data...")
+                    cached_weather_data = get_weather_data()
+
+                historical_df = cached_weather_data
+            else:
+                logger.info(f"[{time.time() - start_time:.2f}s] Loading weather data (cache miss)...")
+                historical_df = get_weather_data()
         
         if historical_df is None or len(historical_df) < 30:
             raise HTTPException(
@@ -289,6 +358,36 @@ async def get_prediction_for_date(
         elapsed = time.time() - start_time
         logger.error(f"Error fetching prediction after {elapsed:.2f}s: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/_internal/test/set-cache-max-date")
+async def _test_set_cache_max_date(payload: dict):
+    """Test-only endpoint: set `cached_weather_data` to a synthetic DataFrame
+    whose maximum date is `payload['max_date']` (YYYY-MM-DD).
+    This helps test cache refresh behavior without restarting the server.
+    """
+    global cached_weather_data, ENABLE_TEST_ENDPOINTS
+    if not ENABLE_TEST_ENDPOINTS:
+        raise HTTPException(status_code=404, detail="Test endpoints are disabled")
+
+    try:
+        max_date = payload.get('max_date')
+        if not max_date:
+            raise ValueError("'max_date' is required (YYYY-MM-DD)")
+
+        end = pd.to_datetime(max_date).date()
+        # create 40 days of dummy historical data ending at `end`
+        dates = pd.date_range(end=end, periods=40).tolist()
+        df = pd.DataFrame({
+            'date': dates,
+            'temp_max': [30.0] * len(dates),
+            'temp_min': [20.0] * len(dates),
+            'rainfall': [0.0] * len(dates)
+        })
+        cached_weather_data = df
+        return {"status": "ok", "cached_max": str(df['date'].max())}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ==================== REAL-TIME WEATHER ENDPOINT ====================
 

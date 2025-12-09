@@ -224,7 +224,10 @@ class LocationModel:
             logger.debug(f"Prediction shape (denormalized): {predictions.shape}")
             
             # Create DataFrame
-            start_date = pd.to_datetime(historical_data_df['date'].max()) + timedelta(days=1)
+            # Use today's date as the starting point (not historical data's last date)
+            # This ensures predictions always show current and future dates
+            from datetime import datetime as dt
+            start_date = pd.Timestamp(dt.now().date()) + timedelta(days=1)
             dates = [start_date + timedelta(days=i) for i in range(30)]
             
             result_df = pd.DataFrame({
