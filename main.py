@@ -22,6 +22,8 @@ WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', '')
 # Import custom modules
 from modules.weather_data import get_weather_data
 from modules.multi_location_predictor import MultiLocationPredictor
+# Authentication router (from auth backend)
+from farmer_auth_backend import router as auth_router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +44,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include authentication endpoints
+app.include_router(auth_router)
 
 # Global state
 predictor = None

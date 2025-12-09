@@ -154,10 +154,11 @@ def verify_token(token: str) -> Optional[str]:
 
 
 # ✅ FASTAPI ENDPOINTS
-app = FastAPI()
+from fastapi import APIRouter
+router = APIRouter()
 
 
-@app.post("/auth/register", response_model=TokenResponse)
+@router.post("/auth/register", response_model=TokenResponse)
 async def register(farmer_data: FarmerRegister, db: Session = Depends(get_db)):
     """
     Register a new farmer
@@ -203,7 +204,7 @@ async def register(farmer_data: FarmerRegister, db: Session = Depends(get_db)):
     }
 
 
-@app.post("/auth/login", response_model=TokenResponse)
+@router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: FarmerLogin, db: Session = Depends(get_db)):
     """
     Login farmer with phone + password
@@ -237,7 +238,7 @@ async def login(credentials: FarmerLogin, db: Session = Depends(get_db)):
     }
 
 
-@app.post("/auth/logout")
+@router.post("/auth/logout")
 async def logout(token: str):
     """
     Logout - just delete token from frontend
@@ -246,7 +247,7 @@ async def logout(token: str):
     return {"message": "Logged out successfully"}
 
 
-@app.get("/profile")
+@router.get("/profile")
 async def get_profile(token: str, db: Session = Depends(get_db)):
     """
     Get farmer profile (requires authentication)
@@ -268,7 +269,7 @@ async def get_profile(token: str, db: Session = Depends(get_db)):
     return FarmerProfile.from_orm(farmer)
 
 
-@app.put("/profile/update")
+@router.put("/profile/update")
 async def update_profile(
     token: str,
     name: Optional[str] = None,
@@ -313,7 +314,7 @@ async def update_profile(
     }
 
 
-@app.post("/auth/verify-token")
+@router.post("/auth/verify-token")
 async def verify_token_endpoint(token: str):
     """
     Verify if token is valid
@@ -333,7 +334,7 @@ async def verify_token_endpoint(token: str):
 
 
 # ✅ TEST ENDPOINTS
-@app.get("/test/register-farmer")
+@router.get("/test/register-farmer")
 async def test_register():
     """Test registration with dummy data"""
     return {
@@ -347,7 +348,7 @@ async def test_register():
     }
 
 
-@app.get("/test/login-farmer")
+@router.get("/test/login-farmer")
 async def test_login():
     """Test login with dummy data"""
     return {
@@ -357,6 +358,11 @@ async def test_login():
             "password": "any_password_123"
         }
     }
+
+
+# Create FastAPI app for standalone execution and include router
+app = FastAPI()
+app.include_router(router)
 
 
 if __name__ == "__main__":

@@ -13,3 +13,5 @@ pydantic==2.5.0
 sqlalchemy>=2.0.0
 pyjwt>=2.8.0
 h5py==3.10.0
+pytest>=7.0.0
+httpx>=0.25.0
