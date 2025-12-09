@@ -91,7 +91,8 @@ def load_local_weather_data():
     Load weather data from local CSV if available
     Tries bangalore_rural_weather.csv first, then any *_weather.csv
     """
-    data_dir = Path("data")
+    # Use absolute path relative to this module's location
+    data_dir = Path(__file__).parent.parent / "data"
     
     # Try primary file first
     csv_path = data_dir / "bangalore_rural_weather.csv"
